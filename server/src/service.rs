@@ -2,7 +2,7 @@
 
 use crate::pangolin_client::PangolinClient;
 use crate::swagger::SwaggerSpec;
-use crate::types::PangolinEndpoint;
+use crate::types::{HttpMethod, PangolinEndpoint};
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::*;
 use rmcp::service::{RequestContext, RoleServer};
@@ -193,11 +193,29 @@ impl PangolinService {
             desc.push_str(&format!(" (Tags: {})", endpoint.tags.join(", ")));
         }
 
+        // Method-based MCP annotations so clients/proxies classify the tool
+        // correctly as read vs write vs destructive. Without these, a proxy
+        // falls back to name heuristics and mislabels e.g. `create_*`/`update_*`
+        // (PUT/POST) as read-only. All tools hit the external Pangolin API
+        // (open world).
+        let annotations = ToolAnnotations::new().open_world(true);
+        let annotations = match endpoint.method {
+            HttpMethod::Get => annotations.read_only(true).destructive(false),
+            HttpMethod::Delete => annotations.read_only(false).destructive(true),
+            HttpMethod::Put => annotations
+                .read_only(false)
+                .destructive(false)
+                .idempotent(true),
+            HttpMethod::Post | HttpMethod::Patch => {
+                annotations.read_only(false).destructive(false)
+            }
+        };
+
         Tool {
             name: Cow::Owned(endpoint.name.clone()),
             description: Some(Cow::Owned(desc)),
             input_schema: Arc::new(schema),
-            annotations: None,
+            annotations: Some(annotations),
             icons: None,
             meta: None,
             output_schema: None,
